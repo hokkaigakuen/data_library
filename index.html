@@ -24,20 +24,20 @@ button{font:inherit;border:0;border-radius:10px;padding:12px 16px;cursor:pointer
 .note{font-size:12px;color:var(--muted);line-height:1.7;margin-top:22px}
 .modal{display:none;position:fixed;inset:0;background:#08182bb8;z-index:10;padding:16px;overflow:auto;align-items:center;justify-content:center}.modal.show{display:flex}.dialog{width:min(620px,100%);background:white;border-radius:18px;padding:24px}.dialog h2{margin:0 0 18px}.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.field{display:flex;flex-direction:column;gap:7px;font-size:12px;font-weight:700;color:var(--muted)}.field.full{grid-column:1/-1}.field textarea{min-height:90px;resize:vertical}.actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}
 @media(max-width:850px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.grid{grid-template-columns:1fr}.top{align-items:flex-start}.tag{display:none}.hero{margin-top:25px}.formgrid{grid-template-columns:1fr}.field.full{grid-column:auto}.toolbar button{width:100%}}
-</style>
+.notice{display:flex;justify-content:space-between;align-items:center;background:#eaf2fb;padding:12px;border-radius:12px;margin-bottom:16px;gap:12px}.cardactions{display:flex;gap:8px;margin-top:12px}</style>
 </head>
 <body>
 <header>
  <div class="top"><div class="brand">HGU-LAB <span style="font-weight:400;opacity:.7">/ ANALYST LIBRARY</span></div><div class="tag">KNOWLEDGE · DATA · INSIGHT</div></div>
  <div class="hero"><small>SHARE THE INSIGHT</small><h1>分析を、チームの知識に。</h1><p>アナリストがまとめたデータ、分析レポート、気づきや面白い資料を共有するライブラリ。<br>一人の発見を、チーム全体の力に。</p></div>
 </header>
-<main>
- <div class="toolbar"><div class="search"><input id="search" placeholder="資料名・内容・投稿者で検索…" aria-label="検索"></div><button class="primary" id="addBtn">＋ 資料を投稿</button></div>
- <div class="filters" id="filters"></div>
+<main><div id="account" style="padding:12px;background:white;border-radius:12px;margin-bottom:16px"><button id="login" class="primary">Googleでログイン</button><button id="logout" class="secondary" style="display:none">ログアウト</button><span id="identity"></span><div id="status" style="color:#b42318;font-size:13px"></div></div><div id="content" style="display:none">
+ <div class="toolbar"><div class="search"><input id="search" placeholder="資料名・内容・投稿者で検索…" aria-label="検索"></div><button class="primary" id="addBtn" style="display:none">＋ 資料を投稿</button></div>
+ <div class="filters" id="filters"></div><div class="notice" id="notice"><b id="unreadCount">未読資料 0件</b> <button id="unreadBtn" class="secondary">未読だけ表示</button></div>
  <div class="sectionhead"><h2>共有ライブラリ</h2><span id="count"></span></div>
  <div class="grid" id="cards"></div>
- <p class="note">※このHTML版の投稿データは、現在利用しているブラウザ内に保存されます。別の端末・閲覧者と共有するには、Firebase等のデータベース接続が必要です。</p>
-</main>
+ <p class="note">資料・未読情報はFirebaseで端末間共有されます。</p>
+</div></main>
 <div class="modal" id="modal"><div class="dialog"><h2>資料を投稿する</h2>
 <form id="postForm"><div class="formgrid">
 <label class="field">資料タイトル<input name="title" required maxlength="100" placeholder="例：春季リーグ 打者傾向分析"></label>
@@ -49,25 +49,74 @@ button{font:inherit;border:0;border-radius:10px;padding:12px 16px;cursor:pointer
 <label class="field full">外部リンク（任意）<input name="url" type="url" placeholder="Google Drive / スプレッドシート / YouTube など"></label>
 </div><div class="actions"><button type="button" class="secondary" id="cancel">キャンセル</button><button class="primary" type="submit">投稿する</button></div></form>
 </div></div>
-<script>
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {getAuth,GoogleAuthProvider,signInWithPopup,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {getFirestore,collection,doc,addDoc,updateDoc,deleteDoc,setDoc,onSnapshot,query,orderBy,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {getStorage,ref,uploadBytes,getDownloadURL,deleteObject} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+const cfg={apiKey:"AIzaSyDvIAyFiOLfScIu8-NPQSevfpw1BJw7hA4",authDomain:"hug-baseball-data.firebaseapp.com",projectId:"hug-baseball-data",storageBucket:"hug-baseball-data.firebasestorage.app",messagingSenderId:"28963444862",appId:"1:28963444862:web:549f3e75ff84843a81202f"};
+const fb=initializeApp(cfg),auth=getAuth(fb),db=getFirestore(fb),storage=getStorage(fb);
+const adminEmail="hokkaigakuenbaseball@gmail.com";
+let user=null,admin=false,reads=new Set(),onlyUnread=false,stopPosts=null,stopReads=null;
+const status=s=>document.getElementById("status").textContent=s;
+document.getElementById("login").onclick=async()=>{try{await signInWithPopup(auth,new GoogleAuthProvider())}catch(e){status("ログインエラー: "+e.message)}};
+document.getElementById("logout").onclick=()=>signOut(auth);
+document.getElementById("unreadBtn").onclick=()=>{onlyUnread=!onlyUnread;document.getElementById("unreadBtn").textContent=onlyUnread?"すべて表示":"未読だけ表示";renderCards()};
+onAuthStateChanged(auth,u=>{
+if(stopPosts)stopPosts();if(stopReads)stopReads();
+user=u;admin=!!u&&u.email?.toLowerCase()===adminEmail;
+document.getElementById("login").style.display=u?"none":"";
+document.getElementById("logout").style.display=u?"":"none";
+document.getElementById("content").style.display=u?"":"none";
+document.getElementById("addBtn").style.display=admin?"":"none";
+document.getElementById("identity").textContent=u?` ${u.email} (${admin?"アナリスト":"閲覧専用"})`:"";
+posts=[];reads=new Set();renderCards();if(!u)return;
+stopPosts=onSnapshot(query(collection(db,"analystLibrary"),orderBy("createdAt","desc")),s=>{posts=s.docs.map(x=>({id:x.id,...x.data()}));renderCards()},e=>status("資料取得エラー: "+e.message));
+stopReads=onSnapshot(collection(db,"users",u.uid,"analystLibraryReads"),s=>{reads=new Set(s.docs.map(x=>x.id));renderCards()},e=>status("未読取得エラー: "+e.message));
+});
+async function markRead(id){if(!user||reads.has(id))return;try{await setDoc(doc(db,"users",user.uid,"analystLibraryReads",id),{readAt:serverTimestamp()})}catch(e){status(e.message)}}
+async function removePost(id){if(!admin)return;const p=posts.find(x=>x.id===id);if(!p||!confirm("この資料を削除しますか？"))return;try{await deleteDoc(doc(db,"analystLibrary",id));if(p.storagePath)await deleteObject(ref(storage,p.storagePath))}catch(e){status("削除エラー: "+e.message)}}
+let editing=null;
+function editPost(id){if(!admin)return;const p=posts.find(x=>x.id===id);if(!p)return;editing=id;const f=document.getElementById("postForm");for(const k of ["title","author","category","type","desc","url"])f.elements[k].value=p[k]||"";document.getElementById("modal").classList.add("show")}
 const categories=["すべて","打撃分析","投手分析","チーム分析","パフォーマンス","研究・論文","面白い資料","その他"];
-const seed=[
-{id:"s1",title:"打球速度・打球角度から見る打撃傾向",author:"Analyst",category:"打撃分析",type:"分析レポート",desc:"打球データを用いて、打者ごとの打球傾向や改善ポイントを整理。データを現場でどう活用するかの視点もまとめています。",date:"サンプル資料",url:""},
-{id:"s2",title:"投手の球種別・コース別投球分析",author:"Analyst",category:"投手分析",type:"データ",desc:"球種、コース、カウント別に投球傾向を整理。配球の特徴や次の対戦に向けた着眼点を共有するためのサンプル。",date:"サンプル資料",url:""},
-{id:"s3",title:"試合の流れと得点期待値について",author:"Analyst",category:"チーム分析",type:"研究資料",desc:"アウトカウント・走者状況と得点の関係を考察。作戦選択や試合中の意思決定を考えるための読み物です。",date:"サンプル資料",url:""},
-{id:"s4",title:"パフォーマンス測定データの見方",author:"Analyst",category:"パフォーマンス",type:"メモ・気づき",desc:"測定値の推移を選手の動きや練習内容と結びつけるための視点をまとめた資料。",date:"サンプル資料",url:""},
-{id:"s5",title:"野球に関する面白い研究・論文まとめ",author:"Analyst",category:"研究・論文",type:"研究資料",desc:"野球の戦術、心理、身体動作などに関する研究を紹介。現場で試せそうなアイデアを共有します。",date:"サンプル資料",url:""},
-{id:"s6",title:"思わず共有したくなる野球データ",author:"Analyst",category:"面白い資料",type:"データ",desc:"意外な傾向や興味深い数字をピックアップ。分析のきっかけになる小ネタ集です。",date:"サンプル資料",url:""}
-];
-let posts=JSON.parse(localStorage.getItem("hguAnalystLibrary")||"null")||seed;
+let posts=[];
 let active="すべて";
 const filters=document.getElementById("filters"),cards=document.getElementById("cards"),search=document.getElementById("search");
 function renderFilters(){filters.innerHTML=categories.map(c=>`<button class="filter ${c===active?"active":""}" data-cat="${c}">${c}</button>`).join("");filters.querySelectorAll("button").forEach(b=>b.onclick=()=>{active=b.dataset.cat;renderFilters();renderCards()})}
-function renderCards(){let q=search.value.toLowerCase().trim();let list=posts.filter(p=>(active==="すべて"||p.category===active)&&[p.title,p.desc,p.author,p.category,p.type].join(" ").toLowerCase().includes(q));document.getElementById("count").textContent=`${list.length} 件`;cards.innerHTML=list.length?list.map(p=>`<article class="card"><div class="cardtop"><span class="category">${esc(p.category)}</span><span class="type">${esc(p.type)}</span></div><h3>${esc(p.title)}</h3><p class="desc">${esc(p.desc)}</p><div class="meta"><span>${esc(p.author)} · ${esc(p.date||"")}</span>${p.url?`<a class="open" href="${esc(p.url)}" target="_blank" rel="noopener">資料を開く ↗</a>`:p.fileData?`<a class="open" href="${p.fileData}" download="${esc(p.fileName||"resource")}">ファイルを開く ↗</a>`:`<span>リンク未設定</span>`}</div></article>`).join(""):`<div class="empty">該当する資料がありません。<br>検索条件を変えてみてください。</div>`}
+function renderCards(){
+const q=search.value.toLowerCase().trim(),unread=posts.filter(p=>!reads.has(p.id)).length;
+document.getElementById("unreadCount").textContent=`未読資料 ${unread}件`;
+const list=posts.filter(p=>(active==="すべて"||p.category===active)&&(!onlyUnread||!reads.has(p.id))&&[p.title,p.desc,p.author,p.category,p.type].join(" ").toLowerCase().includes(q));
+document.getElementById("count").textContent=`${list.length} 件`;
+cards.innerHTML=list.length?list.map(p=>`<article class="card"><div class="cardtop"><span class="category">${esc(p.category)}</span><span class="type">${esc(p.type)}</span>${!reads.has(p.id)?'<b style="color:#c47b00">未読</b>':""}</div><h3>${esc(p.title)}</h3><p class="desc">${esc(p.desc)}</p><div class="meta"><span>${esc(p.author)} · ${p.createdAt?.toDate?.().toLocaleDateString("ja-JP")||""}</span><span>${p.fileUrl?`<a class="open" href="${esc(p.fileUrl)}" target="_blank" rel="noopener" data-read="${esc(p.id)}">ファイル ↗</a>`:""} ${p.url?`<a class="open" href="${esc(p.url)}" target="_blank" rel="noopener" data-read="${esc(p.id)}">リンク ↗</a>`:""}</span></div><div class="cardactions"><button class="secondary" data-read="${esc(p.id)}">既読にする</button>${admin?`<button class="secondary" data-edit="${esc(p.id)}">編集</button><button class="secondary" data-delete="${esc(p.id)}">削除</button>`:""}</div></article>`).join(""):`<div class="empty">資料はありません。</div>`;
+cards.querySelectorAll("[data-read]").forEach(x=>x.addEventListener("click",()=>markRead(x.dataset.read)));
+cards.querySelectorAll("[data-edit]").forEach(x=>x.onclick=()=>editPost(x.dataset.edit));
+cards.querySelectorAll("[data-delete]").forEach(x=>x.onclick=()=>removePost(x.dataset.delete));
+}
 function esc(s){return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
-const modal=document.getElementById("modal");document.getElementById("addBtn").onclick=()=>modal.classList.add("show");document.getElementById("cancel").onclick=()=>modal.classList.remove("show");modal.onclick=e=>{if(e.target===modal)modal.classList.remove("show")};search.oninput=renderCards;
-document.getElementById("postForm").onsubmit=async e=>{e.preventDefault();const f=e.target;const d=new FormData(f);const file=f.elements.file.files[0];let fileData="",fileName="";if(file){if(file.size>2*1024*1024){alert("ファイルは2MB以下にしてください。共有用の大きな資料は外部リンクを利用してください。");return}fileData=await new Promise((res,rej)=>{let r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(file)});fileName=file.name}
-posts.unshift({id:Date.now().toString(),title:d.get("title"),author:d.get("author"),category:d.get("category"),type:d.get("type"),desc:d.get("desc"),url:d.get("url"),fileData,fileName,date:new Date().toLocaleDateString("ja-JP")});try{localStorage.setItem("hguAnalystLibrary",JSON.stringify(posts))}catch(err){alert("保存容量を超えました。ファイルを外部リンクにして再投稿してください。");posts.shift();return}f.reset();modal.classList.remove("show");active="すべて";renderFilters();renderCards()};
+const modal=document.getElementById("modal");
+document.getElementById("addBtn").onclick=()=>{editing=null;document.getElementById("postForm").reset();modal.classList.add("show")};
+document.getElementById("cancel").onclick=()=>modal.classList.remove("show");
+modal.onclick=e=>{if(e.target===modal)modal.classList.remove("show")};search.oninput=renderCards;
+document.getElementById("postForm").onsubmit=async e=>{
+e.preventDefault();if(!admin)return;
+const f=e.target,d=new FormData(f),file=f.elements.file.files[0],old=posts.find(p=>p.id===editing),btn=f.querySelector('[type="submit"]');
+btn.disabled=true;btn.textContent="保存中…";
+try{
+let fileUrl=old?.fileUrl||"",storagePath=old?.storagePath||"",fileName=old?.fileName||"";
+if(file){if(file.size>25*1024*1024)throw Error("ファイルは25MB以下にしてください");
+const path=`analyst-library/${crypto.randomUUID()}/${file.name.replace(/[^a-zA-Z0-9._-]/g,"_")}`;
+await uploadBytes(ref(storage,path),file,{contentType:file.type||"application/octet-stream"});
+fileUrl=await getDownloadURL(ref(storage,path));storagePath=path;fileName=file.name;
+}
+const data={title:d.get("title"),author:d.get("author"),category:d.get("category"),type:d.get("type"),desc:d.get("desc"),url:d.get("url"),fileUrl,storagePath,fileName,updatedAt:serverTimestamp()};
+if(editing){await updateDoc(doc(db,"analystLibrary",editing),data)}
+else{data.createdAt=serverTimestamp();await addDoc(collection(db,"analystLibrary"),data)}
+if(old?.storagePath&&file&&old.storagePath!==storagePath)deleteObject(ref(storage,old.storagePath)).catch(console.warn);
+modal.classList.remove("show");f.reset();editing=null;status("");
+}catch(err){status("保存エラー: "+err.message)}
+finally{btn.disabled=false;btn.textContent="投稿する"}
+};
 renderFilters();renderCards();
 </script>
 </body>

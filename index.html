@@ -36,7 +36,7 @@ button{font:inherit;border:0;border-radius:10px;padding:12px 16px;cursor:pointer
  <div class="filters" id="filters"></div><div class="notice" id="notice"><b id="unreadCount">未読資料 0件</b> <button id="unreadBtn" class="secondary">未読だけ表示</button></div>
  <div class="sectionhead"><h2>共有ライブラリ</h2><span id="count"></span></div>
  <div class="grid" id="cards"></div>
- <p class="note">資料・未読情報はFirebaseで端末間共有されます。</p>
+ <p class="note">資料情報・未読情報はFirestoreで共有されます。GitHub Pagesに置いた資料はURLを知る人がログインなしでも閲覧できます。</p>
 </div></main>
 <div class="modal" id="modal"><div class="dialog"><h2>資料を投稿する</h2>
 <form id="postForm"><div class="formgrid">
@@ -45,39 +45,48 @@ button{font:inherit;border:0;border-radius:10px;padding:12px 16px;cursor:pointer
 <label class="field">カテゴリ<select name="category"><option>打撃分析</option><option>投手分析</option><option>チーム分析</option><option>パフォーマンス</option><option>研究・論文</option><option>面白い資料</option><option>その他</option></select></label>
 <label class="field">資料タイプ<select name="type"><option>レポート</option><option>データ</option><option>研究資料</option><option>動画・リンク</option><option>メモ・気づき</option></select></label>
 <label class="field full">概要<textarea name="desc" required maxlength="500" placeholder="資料の内容や、共有したいポイントを簡単に"></textarea></label>
-<label class="field full">資料ファイル（任意）<input name="file" type="file"></label>
+<label class="field full">PNG・PDFの公開URL（任意）<input name="fileUrl" type="url" placeholder="https://hokkaigakuen.github.io/data_library/files/資料.pdf"></label>
 <label class="field full">外部リンク（任意）<input name="url" type="url" placeholder="Google Drive / スプレッドシート / YouTube など"></label>
 </div><div class="actions"><button type="button" class="secondary" id="cancel">キャンセル</button><button class="primary" type="submit">投稿する</button></div></form>
 </div></div>
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,GoogleAuthProvider,signInWithPopup,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {getFirestore,collection,doc,addDoc,updateDoc,deleteDoc,setDoc,onSnapshot,query,orderBy,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import {getStorage,ref,uploadBytes,getDownloadURL,deleteObject} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+import {getFirestore,collection,doc,getDoc,addDoc,updateDoc,deleteDoc,setDoc,onSnapshot,query,orderBy,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 const cfg={apiKey:"AIzaSyDvIAyFiOLfScIu8-NPQSevfpw1BJw7hA4",authDomain:"hug-baseball-data.firebaseapp.com",projectId:"hug-baseball-data",storageBucket:"hug-baseball-data.firebasestorage.app",messagingSenderId:"28963444862",appId:"1:28963444862:web:549f3e75ff84843a81202f"};
-const fb=initializeApp(cfg),auth=getAuth(fb),db=getFirestore(fb),storage=getStorage(fb);
+const fb=initializeApp(cfg),auth=getAuth(fb),db=getFirestore(fb);
 const adminEmail="hokkaigakuenbaseball@gmail.com";
-let user=null,admin=false,reads=new Set(),onlyUnread=false,stopPosts=null,stopReads=null;
+let user=null,admin=false,approved=false,authVersion=0,reads=new Set(),onlyUnread=false,stopPosts=null,stopReads=null;
 const status=s=>document.getElementById("status").textContent=s;
 document.getElementById("login").onclick=async()=>{try{await signInWithPopup(auth,new GoogleAuthProvider())}catch(e){status("ログインエラー: "+e.message)}};
 document.getElementById("logout").onclick=()=>signOut(auth);
 document.getElementById("unreadBtn").onclick=()=>{onlyUnread=!onlyUnread;document.getElementById("unreadBtn").textContent=onlyUnread?"すべて表示":"未読だけ表示";renderCards()};
-onAuthStateChanged(auth,u=>{
-if(stopPosts)stopPosts();if(stopReads)stopReads();
-user=u;admin=!!u&&u.email?.toLowerCase()===adminEmail;
-document.getElementById("login").style.display=u?"none":"";
-document.getElementById("logout").style.display=u?"":"none";
-document.getElementById("content").style.display=u?"":"none";
-document.getElementById("addBtn").style.display=admin?"":"none";
-document.getElementById("identity").textContent=u?` ${u.email} (${admin?"アナリスト":"閲覧専用"})`:"";
-posts=[];reads=new Set();renderCards();if(!u)return;
-stopPosts=onSnapshot(query(collection(db,"analystLibrary"),orderBy("createdAt","desc")),s=>{posts=s.docs.map(x=>({id:x.id,...x.data()}));renderCards()},e=>status("資料取得エラー: "+e.message));
-stopReads=onSnapshot(collection(db,"users",u.uid,"analystLibraryReads"),s=>{reads=new Set(s.docs.map(x=>x.id));renderCards()},e=>status("未読取得エラー: "+e.message));
+onAuthStateChanged(auth,async u=>{
+ const version=++authVersion;
+ if(stopPosts){stopPosts();stopPosts=null;}if(stopReads){stopReads();stopReads=null;}
+ user=u;admin=!!u&&u.emailVerified===true&&u.email?.toLowerCase()===adminEmail;approved=admin;
+ document.getElementById("login").style.display=u?"none":"";
+ document.getElementById("logout").style.display=u?"":"none";
+ document.getElementById("content").style.display="none";
+ document.getElementById("addBtn").style.display=admin?"":"none";
+ document.getElementById("identity").textContent=u?` ${u.email} (確認中…)`:"";
+ posts=[];reads=new Set();renderCards();status("");if(!u)return;
+ if(!admin){try{
+   const snap=await getDoc(doc(db,"approvedUsers",u.uid));const a=snap.exists()?snap.data():null;
+   approved=!!(a&&a.approved===true&&a.uid===u.uid&&a.email===u.email&&a.role==="player");
+ }catch(e){approved=false;status("承認確認エラー: "+e.message)}}
+ if(version!==authVersion)return;
+ document.getElementById("identity").textContent=` ${u.email} (${admin?"アナリスト":approved?"閲覧専用":"未承認"})`;
+ if(!approved){status("このアカウントには閲覧権限がありません。");return;}
+ document.getElementById("content").style.display="";
+ stopPosts=onSnapshot(query(collection(db,"analystLibrary"),orderBy("createdAt","desc")),s=>{posts=s.docs.map(x=>({id:x.id,...x.data()}));renderCards()},e=>status("資料取得エラー: "+e.message));
+ stopReads=onSnapshot(collection(db,"users",u.uid,"analystLibraryReads"),s=>{reads=new Set(s.docs.map(x=>x.id));renderCards()},e=>status("未読取得エラー: "+e.message));
 });
-async function markRead(id){if(!user||reads.has(id))return;try{await setDoc(doc(db,"users",user.uid,"analystLibraryReads",id),{readAt:serverTimestamp()})}catch(e){status(e.message)}}
-async function removePost(id){if(!admin)return;const p=posts.find(x=>x.id===id);if(!p||!confirm("この資料を削除しますか？"))return;try{await deleteDoc(doc(db,"analystLibrary",id));if(p.storagePath)await deleteObject(ref(storage,p.storagePath))}catch(e){status("削除エラー: "+e.message)}}
+
+async function markRead(id){if(!user||!approved||reads.has(id))return;try{await setDoc(doc(db,"users",user.uid,"analystLibraryReads",id),{readAt:serverTimestamp()})}catch(e){status(e.message)}}
+async function removePost(id){if(!admin)return;const p=posts.find(x=>x.id===id);if(!p||!confirm("この資料の登録情報を削除しますか？（GitHub上のファイル本体は残ります）"))return;try{await deleteDoc(doc(db,"analystLibrary",id))}catch(e){status("削除エラー: "+e.message)}}
 let editing=null;
-function editPost(id){if(!admin)return;const p=posts.find(x=>x.id===id);if(!p)return;editing=id;const f=document.getElementById("postForm");for(const k of ["title","author","category","type","desc","url"])f.elements[k].value=p[k]||"";document.getElementById("modal").classList.add("show")}
+function editPost(id){if(!admin)return;const p=posts.find(x=>x.id===id);if(!p)return;editing=id;const f=document.getElementById("postForm");for(const k of ["title","author","category","type","desc","url","fileUrl"])f.elements[k].value=p[k]||"";document.getElementById("modal").classList.add("show")}
 const categories=["すべて","打撃分析","投手分析","チーム分析","パフォーマンス","研究・論文","面白い資料","その他"];
 let posts=[];
 let active="すべて";
@@ -88,11 +97,12 @@ const q=search.value.toLowerCase().trim(),unread=posts.filter(p=>!reads.has(p.id
 document.getElementById("unreadCount").textContent=`未読資料 ${unread}件`;
 const list=posts.filter(p=>(active==="すべて"||p.category===active)&&(!onlyUnread||!reads.has(p.id))&&[p.title,p.desc,p.author,p.category,p.type].join(" ").toLowerCase().includes(q));
 document.getElementById("count").textContent=`${list.length} 件`;
-cards.innerHTML=list.length?list.map(p=>`<article class="card"><div class="cardtop"><span class="category">${esc(p.category)}</span><span class="type">${esc(p.type)}</span>${!reads.has(p.id)?'<b style="color:#c47b00">未読</b>':""}</div><h3>${esc(p.title)}</h3><p class="desc">${esc(p.desc)}</p><div class="meta"><span>${esc(p.author)} · ${p.createdAt?.toDate?.().toLocaleDateString("ja-JP")||""}</span><span>${p.fileUrl?`<a class="open" href="${esc(p.fileUrl)}" target="_blank" rel="noopener" data-read="${esc(p.id)}">ファイル ↗</a>`:""} ${p.url?`<a class="open" href="${esc(p.url)}" target="_blank" rel="noopener" data-read="${esc(p.id)}">リンク ↗</a>`:""}</span></div><div class="cardactions"><button class="secondary" data-read="${esc(p.id)}">既読にする</button>${admin?`<button class="secondary" data-edit="${esc(p.id)}">編集</button><button class="secondary" data-delete="${esc(p.id)}">削除</button>`:""}</div></article>`).join(""):`<div class="empty">資料はありません。</div>`;
+cards.innerHTML=list.length?list.map(p=>`<article class="card"><div class="cardtop"><span class="category">${esc(p.category)}</span><span class="type">${esc(p.type)}</span>${!reads.has(p.id)?'<b style="color:#c47b00">未読</b>':""}</div><h3>${esc(p.title)}</h3><p class="desc">${esc(p.desc)}</p><div class="meta"><span>${esc(p.author)} · ${p.createdAt?.toDate?.().toLocaleDateString("ja-JP")||""}</span><span>${p.fileUrl?`<a class="open" href="${esc(safeLink(p.fileUrl))}" target="_blank" rel="noopener" data-read="${esc(p.id)}">ファイル ↗</a>`:""} ${p.url?`<a class="open" href="${esc(safeLink(p.url))}" target="_blank" rel="noopener" data-read="${esc(p.id)}">リンク ↗</a>`:""}</span></div><div class="cardactions"><button class="secondary" data-read="${esc(p.id)}">既読にする</button>${admin?`<button class="secondary" data-edit="${esc(p.id)}">編集</button><button class="secondary" data-delete="${esc(p.id)}">削除</button>`:""}</div></article>`).join(""):`<div class="empty">資料はありません。</div>`;
 cards.querySelectorAll("[data-read]").forEach(x=>x.addEventListener("click",()=>markRead(x.dataset.read)));
 cards.querySelectorAll("[data-edit]").forEach(x=>x.onclick=()=>editPost(x.dataset.edit));
 cards.querySelectorAll("[data-delete]").forEach(x=>x.onclick=()=>removePost(x.dataset.delete));
 }
+function safeLink(s){try{const u=new URL(s);return ["https:","http:"].includes(u.protocol)?u.href:""}catch{return ""}}
 function esc(s){return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 const modal=document.getElementById("modal");
 document.getElementById("addBtn").onclick=()=>{editing=null;document.getElementById("postForm").reset();modal.classList.add("show")};
@@ -100,19 +110,15 @@ document.getElementById("cancel").onclick=()=>modal.classList.remove("show");
 modal.onclick=e=>{if(e.target===modal)modal.classList.remove("show")};search.oninput=renderCards;
 document.getElementById("postForm").onsubmit=async e=>{
 e.preventDefault();if(!admin)return;
-const f=e.target,d=new FormData(f),file=f.elements.file.files[0],old=posts.find(p=>p.id===editing),btn=f.querySelector('[type="submit"]');
+const f=e.target,d=new FormData(f),old=posts.find(p=>p.id===editing),btn=f.querySelector('[type="submit"]');
 btn.disabled=true;btn.textContent="保存中…";
 try{
-let fileUrl=old?.fileUrl||"",storagePath=old?.storagePath||"",fileName=old?.fileName||"";
-if(file){if(file.size>25*1024*1024)throw Error("ファイルは25MB以下にしてください");
-const path=`analyst-library/${crypto.randomUUID()}/${file.name.replace(/[^a-zA-Z0-9._-]/g,"_")}`;
-await uploadBytes(ref(storage,path),file,{contentType:file.type||"application/octet-stream"});
-fileUrl=await getDownloadURL(ref(storage,path));storagePath=path;fileName=file.name;
-}
-const data={title:d.get("title"),author:d.get("author"),category:d.get("category"),type:d.get("type"),desc:d.get("desc"),url:d.get("url"),fileUrl,storagePath,fileName,updatedAt:serverTimestamp()};
+const fileUrl=String(d.get("fileUrl")||"").trim(),externalUrl=String(d.get("url")||"").trim();
+for(const value of [fileUrl,externalUrl]){if(value){const parsed=new URL(value);if(!["https:","http:"].includes(parsed.protocol))throw Error("URLはhttp/httpsのみ利用できます");}}
+const data={title:d.get("title"),author:d.get("author"),category:d.get("category"),type:d.get("type"),desc:d.get("desc"),url:externalUrl,fileUrl,storagePath:"",fileName:fileUrl?decodeURIComponent(new URL(fileUrl).pathname.split("/").pop()):"",updatedAt:serverTimestamp()};
 if(editing){await updateDoc(doc(db,"analystLibrary",editing),data)}
 else{data.createdAt=serverTimestamp();await addDoc(collection(db,"analystLibrary"),data)}
-if(old?.storagePath&&file&&old.storagePath!==storagePath)deleteObject(ref(storage,old.storagePath)).catch(console.warn);
+
 modal.classList.remove("show");f.reset();editing=null;status("");
 }catch(err){status("保存エラー: "+err.message)}
 finally{btn.disabled=false;btn.textContent="投稿する"}

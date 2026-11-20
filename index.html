@@ -24,7 +24,10 @@ button{font:inherit;border:0;border-radius:10px;padding:12px 16px;cursor:pointer
 .note{font-size:12px;color:var(--muted);line-height:1.7;margin-top:22px}
 .modal{display:none;position:fixed;inset:0;background:#08182bb8;z-index:10;padding:16px;overflow:auto;align-items:center;justify-content:center}.modal.show{display:flex}.dialog{width:min(620px,100%);background:white;border-radius:18px;padding:24px}.dialog h2{margin:0 0 18px}.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.field{display:flex;flex-direction:column;gap:7px;font-size:12px;font-weight:700;color:var(--muted)}.field.full{grid-column:1/-1}.field textarea{min-height:90px;resize:vertical}.actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}
 @media(max-width:850px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.grid{grid-template-columns:1fr}.top{align-items:flex-start}.tag{display:none}.hero{margin-top:25px}.formgrid{grid-template-columns:1fr}.field.full{grid-column:auto}.toolbar button{width:100%}}
-.previewDialog{width:min(1050px,100%);max-height:95vh;display:flex;flex-direction:column}.previewFrame{width:100%;height:75vh;min-height:350px;border:1px solid var(--line);border-radius:10px;background:#f5f8fc}.previewHead{display:flex;justify-content:space-between;align-items:center;gap:12px}.previewHead h2{margin:0}.previewActions{display:flex;gap:8px;flex-wrap:wrap}.cardactions{flex-wrap:wrap}.notice{display:flex;justify-content:space-between;align-items:center;background:#eaf2fb;padding:12px;border-radius:12px;margin-bottom:16px;gap:12px}.cardactions{display:flex;gap:8px;margin-top:12px}</style>
+.previewDialog{width:min(1050px,100%);max-height:95vh;display:flex;flex-direction:column}.previewFrame{width:100%;height:75vh;min-height:350px;border:1px solid var(--line);border-radius:10px;background:#f5f8fc}.previewHead{display:flex;justify-content:space-between;align-items:center;gap:12px}.previewHead h2{margin:0}.previewActions{display:flex;gap:8px;flex-wrap:wrap}.cardactions{flex-wrap:wrap}.notice{display:flex;justify-content:space-between;align-items:center;background:#eaf2fb;padding:12px;border-radius:12px;margin-bottom:16px;gap:12px}.cardactions{display:flex;gap:8px;margin-top:12px}
+.password-gate{position:fixed;inset:0;z-index:1000;background:#0b1930ed;display:none;align-items:center;justify-content:center;padding:18px}
+.password-gate.show{display:flex}.password-panel{background:white;border-radius:16px;padding:25px;width:min(390px,100%);box-shadow:0 16px 55px #0005}.password-panel h2{margin:0 0 9px;color:var(--navy);font-size:21px}.password-panel p{color:var(--muted);font-size:13px}.password-panel input{width:100%;margin:9px 0}.password-panel .actions{display:flex;gap:8px}.password-panel .actions button{flex:1}.password-error{min-height:20px;color:#b42318;font-size:12px;margin-top:9px}
+</style>
 </head>
 <body>
 <header>
@@ -50,6 +53,10 @@ button{font:inherit;border:0;border-radius:10px;padding:12px 16px;cursor:pointer
 </div><div class="actions"><button type="button" class="secondary" id="cancel">キャンセル</button><button class="primary" type="submit">投稿する</button></div></form>
 </div></div>
 <div class="modal" id="previewModal" role="dialog" aria-modal="true" aria-labelledby="previewTitle"><div class="dialog previewDialog"><div class="previewHead"><h2 id="previewTitle">PDFプレビュー</h2><button class="secondary" id="closePreview" type="button">閉じる</button></div><p class="note" id="previewHint">PDFを表示しています。</p><iframe id="previewFrame" class="previewFrame" title="PDFプレビュー" loading="lazy"></iframe><div class="actions"><a id="previewExternal" class="open" target="_blank" rel="noopener noreferrer">別タブで開く</a></div></div></div>
+<div id="passwordGate" class="password-gate" role="dialog" aria-modal="true" aria-labelledby="passwordTitle">
+ <div class="password-panel"><h2 id="passwordTitle">データライブラリー</h2><p>閲覧するには共通パスワードを入力してください。</p>
+ <form id="passwordForm"><input id="sharedPassword" type="password" placeholder="パスワード" autocomplete="off" required aria-label="共通パスワード"><div class="actions"><button class="primary" type="submit">確認する</button><button class="secondary" type="button" id="passwordLogout">ログアウト</button></div><div class="password-error" id="passwordError" role="alert"></div></form></div>
+</div>
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,GoogleAuthProvider,signInWithPopup,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -57,6 +64,26 @@ import {getFirestore,collection,doc,getDoc,addDoc,updateDoc,deleteDoc,setDoc,onS
 const cfg={apiKey:"AIzaSyDvIAyFiOLfScIu8-NPQSevfpw1BJw7hA4",authDomain:"hug-baseball-data.firebaseapp.com",projectId:"hug-baseball-data",storageBucket:"hug-baseball-data.firebasestorage.app",messagingSenderId:"28963444862",appId:"1:28963444862:web:549f3e75ff84843a81202f"};
 const fb=initializeApp(cfg),auth=getAuth(fb),db=getFirestore(fb);
 const adminEmail="hokkaigakuenbaseball@gmail.com";
+const SHARED_PASSWORD="hgu89";
+const PASSWORD_SESSION_KEY="hguLibraryPasswordVerified";
+const passwordGate=document.getElementById("passwordGate");
+const passwordForm=document.getElementById("passwordForm");
+const passwordInput=document.getElementById("sharedPassword");
+const passwordError=document.getElementById("passwordError");
+let passwordContinue=null;
+function showPasswordGate(continueFn){
+ passwordContinue=continueFn;passwordError.textContent="";passwordInput.value="";
+ passwordGate.classList.add("show");passwordInput.focus();
+}
+function hidePasswordGate(){passwordGate.classList.remove("show");passwordContinue=null;passwordInput.value="";passwordError.textContent=""}
+passwordForm.addEventListener("submit",e=>{
+ e.preventDefault();
+ if(passwordInput.value!==SHARED_PASSWORD){passwordError.textContent="パスワードが違います。";passwordInput.select();return;}
+ sessionStorage.setItem(PASSWORD_SESSION_KEY,"ok");
+ const continueFn=passwordContinue;hidePasswordGate();if(continueFn)continueFn();
+});
+document.getElementById("passwordLogout").onclick=()=>signOut(auth);
+
 let user=null,admin=false,approved=false,authVersion=0,reads=new Set(),onlyUnread=false,stopPosts=null,stopReads=null;
 const status=s=>document.getElementById("status").textContent=s;
 document.getElementById("login").onclick=async()=>{try{await signInWithPopup(auth,new GoogleAuthProvider())}catch(e){status("ログインエラー: "+e.message)}};
@@ -64,6 +91,7 @@ document.getElementById("logout").onclick=()=>signOut(auth);
 document.getElementById("unreadBtn").onclick=()=>{onlyUnread=!onlyUnread;document.getElementById("unreadBtn").textContent=onlyUnread?"すべて表示":"未読だけ表示";renderCards()};
 onAuthStateChanged(auth,async u=>{
  const version=++authVersion;
+ hidePasswordGate();
  if(stopPosts){stopPosts();stopPosts=null;}if(stopReads){stopReads();stopReads=null;}
  user=u;admin=!!u&&u.emailVerified===true&&u.email?.toLowerCase()===adminEmail;approved=admin;
  document.getElementById("login").style.display=u?"none":"";
@@ -71,7 +99,7 @@ onAuthStateChanged(auth,async u=>{
  document.getElementById("content").style.display="none";
  document.getElementById("addBtn").style.display=admin?"":"none";
  document.getElementById("identity").textContent=u?` ${u.email} (確認中…)`:"";
- posts=[];reads=new Set();renderCards();status("");if(!u)return;
+ posts=[];reads=new Set();renderCards();status("");if(!u){sessionStorage.removeItem(PASSWORD_SESSION_KEY);return;}
  if(!admin){try{
    const snap=await getDoc(doc(db,"approvedUsers",u.uid));const a=snap.exists()?snap.data():null;
    approved=!!(a&&a.approved===true&&a.uid===u.uid&&a.email===u.email&&a.role==="player");
@@ -79,9 +107,14 @@ onAuthStateChanged(auth,async u=>{
  if(version!==authVersion)return;
  document.getElementById("identity").textContent=` ${u.email} (${admin?"アナリスト":approved?"閲覧専用":"未承認"})`;
  if(!approved){status("このアカウントには閲覧権限がありません。");return;}
- document.getElementById("content").style.display="";
- stopPosts=onSnapshot(query(collection(db,"analystLibrary"),orderBy("createdAt","desc")),s=>{posts=s.docs.map(x=>({id:x.id,...x.data()}));renderCards()},e=>status("資料取得エラー: "+e.message));
- stopReads=onSnapshot(collection(db,"users",u.uid,"analystLibraryReads"),s=>{reads=new Set(s.docs.map(x=>x.id));renderCards()},e=>status("未読取得エラー: "+e.message));
+ const openLibrary=()=>{
+  if(version!==authVersion||!auth.currentUser||!approved)return;
+  document.getElementById("content").style.display="";
+  stopPosts=onSnapshot(query(collection(db,"analystLibrary"),orderBy("createdAt","desc")),s=>{posts=s.docs.map(x=>({id:x.id,...x.data()}));renderCards()},e=>status("資料取得エラー: "+e.message));
+  stopReads=onSnapshot(collection(db,"users",u.uid,"analystLibraryReads"),s=>{reads=new Set(s.docs.map(x=>x.id));renderCards()},e=>status("未読取得エラー: "+e.message));
+ };
+ if(sessionStorage.getItem(PASSWORD_SESSION_KEY)==="ok")openLibrary();
+ else showPasswordGate(openLibrary);
 });
 
 async function markRead(id){if(!user||!approved||reads.has(id))return;try{await setDoc(doc(db,"users",user.uid,"analystLibraryReads",id),{readAt:serverTimestamp()})}catch(e){status(e.message)}}

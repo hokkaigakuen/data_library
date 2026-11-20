@@ -95,10 +95,15 @@ const filters=document.getElementById("filters"),cards=document.getElementById("
 function renderFilters(){filters.innerHTML=categories.map(c=>`<button class="filter ${c===active?"active":""}" data-cat="${c}">${c}</button>`).join("");filters.querySelectorAll("button").forEach(b=>b.onclick=()=>{active=b.dataset.cat;renderFilters();renderCards()})}
 function normalizeFileUrl(value){
  const url=safeLink(value);if(!url)return "";
- try{const u=new URL(url);
-   // GitHubのファイル表示URLはPDF本体のURLではないためPagesのURLへ変換
-   const m=u.hostname==="github.com"&&u.pathname.match(/^\/hokkaigakuen\/(data_library|data_library-test)\/blob\/[^/]+\/(.+)$/);
+ try{
+   const u=new URL(url);
+   // GitHubのblob/rawページではなく、公開済みGitHub PagesのPDFを直接開く
+   const m=u.hostname==="github.com" && u.pathname.match(/^\/hokkaigakuen\/(data_library|data_library-test)\/(?:blob|raw)\/[^/]+\/(.+)$/);
    if(m)return `https://hokkaigakuen.github.io/${m[1]}/${m[2]}`;
+   if(u.hostname==="raw.githubusercontent.com"){
+     const raw=u.pathname.match(/^\/hokkaigakuen\/(data_library|data_library-test)\/[^/]+\/(.+)$/);
+     if(raw)return `https://hokkaigakuen.github.io/${raw[1]}/${raw[2]}`;
+   }
  }catch{}return url;
 }
 function isPdf(url){try{return decodeURIComponent(new URL(url).pathname).toLowerCase().endsWith(".pdf")}catch{return false}}
@@ -113,8 +118,9 @@ function openFile(id){
  markRead(id);
  if(!isPdf(url)){window.open(url,"_blank","noopener,noreferrer");return}
  document.getElementById("previewTitle").textContent=p.title||"PDFプレビュー";
- document.getElementById("previewHint").textContent="PDFが表示されない場合は「別タブで開く」をお試しください。";
+ document.getElementById("previewHint").textContent="ブラウザ標準のPDF表示で開いています。表示できない場合は「別タブで開く」をお試しください。";
  document.getElementById("previewExternal").href=url;
+ previewFrame.removeAttribute("src");
  previewFrame.src=url;
  previewModal.classList.add("show");
 }

@@ -106,6 +106,23 @@ function normalizeFileUrl(value){
    }
  }catch{}return url;
 }
+// GitHub上の実際のファイル名が結合文字（ク + 濁点）になっている資料だけを補正する。
+// 他のPDFのファイル名やURLは一切変更しない。
+function resolvePdfUrl(value){
+ const url=normalizeFileUrl(value);
+ if(!url)return "";
+ try{
+  const u=new URL(url);
+  if(u.hostname==="hokkaigakuen.github.io" && u.pathname.startsWith("/data_library/")){
+   const name=decodeURIComponent(u.pathname.slice("/data_library/".length));
+   if(name.normalize("NFC")==="26リーグ戦を終えて打者.pdf"){
+    u.pathname="/data_library/"+encodeURIComponent("26リーク\u3099戦を終えて打者.pdf");
+    return u.href;
+   }
+  }
+ }catch{}
+ return url;
+}
 function isPdf(url){try{return decodeURIComponent(new URL(url).pathname).toLowerCase().endsWith(".pdf")}catch{return false}}
 const previewModal=document.getElementById("previewModal"),previewFrame=document.getElementById("previewFrame");
 function closePreview(){previewModal.classList.remove("show");previewFrame.src="about:blank"}
@@ -114,7 +131,7 @@ previewModal.addEventListener("click",e=>{if(e.target===previewModal)closePrevie
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closePreview()});
 function openFile(id){
  const p=posts.find(x=>x.id===id);if(!p)return;
- const url=normalizeFileUrl(p.fileUrl);if(!url){status("資料URLが登録されていません。");return}
+ const url=resolvePdfUrl(p.fileUrl);if(!url){status("資料URLが登録されていません。");return}
  markRead(id);
  if(!isPdf(url)){window.open(url,"_blank","noopener,noreferrer");return}
  document.getElementById("previewTitle").textContent=p.title||"PDFプレビュー";
@@ -130,7 +147,7 @@ function renderCards(){
  const list=posts.filter(p=>(active==="すべて"||p.category===active)&&(!onlyUnread||!reads.has(p.id))&&[p.title,p.desc,p.author,p.category,p.type,p.fileName].join(" ").toLowerCase().includes(q));
  document.getElementById("count").textContent=`${list.length} 件（登録総数 ${posts.length} 件）`;
  cards.innerHTML=list.length?list.map(p=>{
- const fileUrl=normalizeFileUrl(p.fileUrl),link=safeLink(p.url);
+ const fileUrl=resolvePdfUrl(p.fileUrl),link=safeLink(p.url);
  return `<article class="card"><div class="cardtop"><span class="category">${esc(p.category)}</span><span class="type">${esc(p.type)}</span>${!reads.has(p.id)?'<b style="color:#c47b00">未読</b>':""}</div><h3>${esc(p.title)}</h3><p class="desc">${esc(p.desc)}</p><div class="meta"><span>${esc(p.author)} · ${p.createdAt?.toDate?.().toLocaleDateString("ja-JP")||""}</span><span>${fileUrl?`<button class="secondary" style="padding:7px 10px" data-open="${esc(p.id)}">${isPdf(fileUrl)?"PDFをサイト内で見る":"ファイルを開く"}</button>`:""} ${link?`<a class="open" href="${esc(link)}" target="_blank" rel="noopener noreferrer" data-linkread="${esc(p.id)}">リンク ↗</a>`:""}</span></div><div class="cardactions">${reads.has(p.id)?'<span class="type">既読</span>':`<button class="secondary" data-read="${esc(p.id)}">既読にする</button>`}${admin?`<button class="secondary" data-edit="${esc(p.id)}">編集</button><button class="secondary" data-delete="${esc(p.id)}">削除</button>`:""}</div></article>`;
  }).join(""):`<div class="empty">${posts.length?"検索条件に一致する資料はありません。":"資料はまだ登録されていません。"}</div>`;
  cards.querySelectorAll("[data-open]").forEach(x=>x.onclick=()=>openFile(x.dataset.open));
@@ -151,7 +168,7 @@ e.preventDefault();if(!admin)return;
 const f=e.target,d=new FormData(f),old=posts.find(p=>p.id===editing),btn=f.querySelector('[type="submit"]');
 btn.disabled=true;btn.textContent="保存中…";
 try{
-const fileUrl=normalizeFileUrl(String(d.get("fileUrl")||"").trim()),externalUrl=String(d.get("url")||"").trim();
+const fileUrl=resolvePdfUrl(String(d.get("fileUrl")||"").trim()),externalUrl=String(d.get("url")||"").trim();
 if(fileUrl&&!isPdf(fileUrl))throw Error("資料ファイルはPDFの公開URLを登録してください（.pdf）。");
 for(const value of [fileUrl,externalUrl]){if(value){const parsed=new URL(value);if(!["https:","http:"].includes(parsed.protocol))throw Error("URLはhttp/httpsのみ利用できます");}}
 const data={title:d.get("title"),author:d.get("author"),category:d.get("category"),type:d.get("type"),desc:d.get("desc"),url:externalUrl,fileUrl,storagePath:"",fileName:fileUrl?decodeURIComponent(new URL(fileUrl).pathname.split("/").pop()):"",updatedAt:serverTimestamp()};

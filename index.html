@@ -66,7 +66,6 @@ document.getElementById("logout").onclick=()=>signOut(auth);
 document.getElementById("unreadBtn").onclick=()=>{onlyUnread=!onlyUnread;document.getElementById("unreadBtn").textContent=onlyUnread?"すべて表示":"未読だけ表示";renderCards()};
 onAuthStateChanged(auth,async u=>{
  const version=++authVersion;
- hidePasswordGate();
  if(stopPosts){stopPosts();stopPosts=null;}if(stopReads){stopReads();stopReads=null;}
  user=u;admin=!!u&&u.emailVerified===true&&u.email?.toLowerCase()===adminEmail;approved=admin;
  document.getElementById("login").style.display=u?"none":"";
@@ -85,6 +84,7 @@ onAuthStateChanged(auth,async u=>{
  const openLibrary=()=>{
   if(version!==authVersion||!auth.currentUser||!approved)return;
   document.getElementById("content").style.display="";
+  document.getElementById("addBtn").style.display=admin?"":"none";
   stopPosts=onSnapshot(query(collection(db,"analystLibrary"),orderBy("createdAt","desc")),s=>{posts=s.docs.map(x=>({id:x.id,...x.data()}));renderCards()},e=>status("資料取得エラー: "+e.message));
   stopReads=onSnapshot(collection(db,"users",u.uid,"analystLibraryReads"),s=>{reads=new Set(s.docs.map(x=>x.id));renderCards()},e=>status("未読取得エラー: "+e.message));
  };

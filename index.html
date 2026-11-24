@@ -51,7 +51,7 @@ button{font:inherit;border:0;border-radius:10px;padding:12px 16px;cursor:pointer
 <label class="field full">外部リンク（任意）<input name="url" type="url" placeholder="Google Drive / スプレッドシート / YouTube など"></label>
 </div><div class="actions"><button type="button" class="secondary" id="cancel">キャンセル</button><button class="primary" type="submit">投稿する</button></div></form>
 </div></div>
-<div class="modal" id="previewModal" role="dialog" aria-modal="true" aria-labelledby="previewTitle"><div class="dialog previewDialog"><div class="previewHead"><h2 id="previewTitle">PDFプレビュー</h2><button class="secondary" id="closePreview" type="button">閉じる</button></div><p class="note" id="previewHint">PDFを表示しています。</p><iframe id="previewFrame" class="previewFrame" title="PDFプレビュー" loading="lazy"></iframe><div class="actions"><a id="previewExternal" class="open" target="_blank" rel="noopener noreferrer">別タブで開く</a></div></div></div>
+<div class="modal" id="previewModal" role="dialog" aria-modal="true" aria-labelledby="previewTitle"><div class="dialog previewDialog"><div class="previewHead"><h2 id="previewTitle">PDFプレビュー</h2><button class="secondary" id="closePreview" type="button">閉じる</button></div><p class="note" id="previewHint">PDFを表示しています。</p><iframe id="previewFrame" class="previewFrame" title="PDFプレビュー"></iframe><div class="actions"><a id="previewExternal" class="open" target="_blank" rel="noopener noreferrer">別タブで開く</a></div></div></div>
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,GoogleAuthProvider,signInWithPopup,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -73,7 +73,7 @@ onAuthStateChanged(auth,async u=>{
  document.getElementById("content").style.display="none";
  document.getElementById("addBtn").style.display="none";
  document.getElementById("identity").textContent=u?` ${u.email} (確認中…)`:"";
- posts=[];reads=new Set();renderCards();status("");if(!u)return;
+ closePreview();posts=[];reads=new Set();renderCards();status("");if(!u)return;
  if(!admin){try{
    const snap=await getDoc(doc(db,"approvedUsers",u.uid));const a=snap.exists()?snap.data():null;
    approved=!!(a&&a.approved===true&&a.uid===u.uid&&a.email===u.email&&a.role==="player");
@@ -85,7 +85,7 @@ onAuthStateChanged(auth,async u=>{
   if(version!==authVersion||!auth.currentUser||!approved)return;
   document.getElementById("content").style.display="";
   document.getElementById("addBtn").style.display=admin?"":"none";
-  stopPosts=onSnapshot(query(collection(db,"analystLibrary"),orderBy("createdAt","desc")),s=>{posts=s.docs.map(x=>({id:x.id,...x.data()}));renderCards()},e=>status("資料取得エラー: "+e.message));
+  stopPosts=onSnapshot(query(collection(db,"analystLibrary"),orderBy("createdAt","desc")),s=>{posts=s.docs.map(x=>({...x.data(),id:x.id}));renderCards()},e=>status("資料取得エラー: "+e.message));
   stopReads=onSnapshot(collection(db,"users",u.uid,"analystLibraryReads"),s=>{reads=new Set(s.docs.map(x=>x.id));renderCards()},e=>status("未読取得エラー: "+e.message));
  };
  openLibrary();
@@ -131,22 +131,32 @@ function resolvePdfUrl(value){
  return url;
 }
 function isPdf(url){try{return decodeURIComponent(new URL(url).pathname).toLowerCase().endsWith(".pdf")}catch{return false}}
-const previewModal=document.getElementById("previewModal"),previewFrame=document.getElementById("previewFrame");
-function closePreview(){previewModal.classList.remove("show");previewFrame.src="about:blank"}
+const previewModal=document.getElementById("previewModal");
+function closePreview(){
+ previewModal.classList.remove("show");
+ const frame=document.getElementById("previewFrame");
+ const fresh=frame.cloneNode(false);fresh.removeAttribute("src");frame.replaceWith(fresh);
+ document.getElementById("previewExternal").removeAttribute("href");
+}
 document.getElementById("closePreview").onclick=closePreview;
 previewModal.addEventListener("click",e=>{if(e.target===previewModal)closePreview()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closePreview()});
 function openFile(id){
+ if(!approved)return;
  const p=posts.find(x=>x.id===id);if(!p)return;
  const url=resolvePdfUrl(p.fileUrl);if(!url){status("資料URLが登録されていません。");return}
  markRead(id);
  if(!isPdf(url)){window.open(url,"_blank","noopener,noreferrer");return}
  document.getElementById("previewTitle").textContent=p.title||"PDFプレビュー";
- document.getElementById("previewHint").textContent="ブラウザ標準のPDF表示で開いています。表示できない場合は「別タブで開く」をお試しください。";
+ document.getElementById("previewHint").textContent="ブラウザ標準のPDF表示で開いています。表示できない場合は「別タブで開く」で、この資料のURLが正しいか確認してください。";
  document.getElementById("previewExternal").href=url;
- previewFrame.removeAttribute("src");
- previewFrame.src=url;
+ const previous=document.getElementById("previewFrame");
+ const frame=previous.cloneNode(false);
+ frame.removeAttribute("src");
+ frame.title=p.title||"PDFプレビュー";
  previewModal.classList.add("show");
+ previous.replaceWith(frame);
+ frame.src=url;
 }
 function renderCards(){
  const q=search.value.toLowerCase().trim(),unread=posts.filter(p=>!reads.has(p.id)).length;

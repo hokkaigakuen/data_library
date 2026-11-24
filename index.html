@@ -100,36 +100,33 @@ let posts=[];
 let active="すべて";
 const filters=document.getElementById("filters"),cards=document.getElementById("cards"),search=document.getElementById("search");
 function renderFilters(){filters.innerHTML=categories.map(c=>`<button class="filter ${c===active?"active":""}" data-cat="${c}">${c}</button>`).join("");filters.querySelectorAll("button").forEach(b=>b.onclick=()=>{active=b.dataset.cat;renderFilters();renderCards()})}
-function normalizeFileUrl(value){
- const url=safeLink(value);if(!url)return "";
- try{
-   const u=new URL(url);
-   // GitHubのblob/rawページではなく、公開済みGitHub PagesのPDFを直接開く
-   const m=u.hostname==="github.com" && u.pathname.match(/^\/hokkaigakuen\/(data_library|data_library-test)\/(?:blob|raw)\/[^/]+\/(.+)$/);
-   if(m)return `https://hokkaigakuen.github.io/${m[1]}/${m[2]}`;
-   if(u.hostname==="raw.githubusercontent.com"){
-     const raw=u.pathname.match(/^\/hokkaigakuen\/(data_library|data_library-test)\/[^/]+\/(.+)$/);
-     if(raw)return `https://hokkaigakuen.github.io/${raw[1]}/${raw[2]}`;
-   }
- }catch{}return url;
+function encodeUrlPath(pathname){
+ // パスを「/」で区切り、各ファイル名だけをUTF-8で安全にエンコードする。
+ // 既に%エンコードされた文字列も一度だけ復号してから再エンコードする。
+ return pathname.split("/").map(segment=>{
+  if(!segment)return "";
+  let decoded=segment;
+  try{decoded=decodeURIComponent(segment)}catch{}
+  return encodeURIComponent(decoded);
+ }).join("/");
 }
-// GitHub上の実際のファイル名が結合文字（ク + 濁点）になっている資料だけを補正する。
-// 他のPDFのファイル名やURLは一切変更しない。
-function resolvePdfUrl(value){
- const url=normalizeFileUrl(value);
- if(!url)return "";
+function normalizeFileUrl(value){
+ const url=safeLink(String(value||"").trim());if(!url)return "";
  try{
   const u=new URL(url);
-  if(u.hostname==="hokkaigakuen.github.io" && u.pathname.startsWith("/data_library/")){
-   const name=decodeURIComponent(u.pathname.slice("/data_library/".length));
-   if(name.normalize("NFC")==="26リーグ戦を終えて打者.pdf"){
-    u.pathname="/data_library/"+encodeURIComponent("26リーク\u3099戦を終えて打者.pdf");
-    return u.href;
-   }
+  // GitHubのblob/rawページをGitHub Pagesの公開URLへ変換する。
+  const m=u.hostname==="github.com" && u.pathname.match(/^\/hokkaigakuen\/(data_library|data_library-test)\/(?:blob|raw)\/[^/]+\/(.+)$/);
+  if(m){u.hostname="hokkaigakuen.github.io";u.pathname="/"+m[1]+"/"+m[2];}
+  else if(u.hostname==="raw.githubusercontent.com"){
+   const raw=u.pathname.match(/^\/hokkaigakuen\/(data_library|data_library-test)\/[^/]+\/(.+)$/);
+   if(raw){u.hostname="hokkaigakuen.github.io";u.pathname="/"+raw[1]+"/"+raw[2];}
   }
- }catch{}
- return url;
+  // URL.pathname setterではなく、エンコード済みパスを文字列として組み立てる。
+  return u.origin+encodeUrlPath(u.pathname)+u.search+u.hash;
+ }catch{return ""}
 }
+// 特定ファイル名だけの例外処理は行わず、各資料に保存されたURLを個別に扱う。
+function resolvePdfUrl(value){return normalizeFileUrl(value)}
 function isPdf(url){try{return decodeURIComponent(new URL(url).pathname).toLowerCase().endsWith(".pdf")}catch{return false}}
 const previewModal=document.getElementById("previewModal");
 function closePreview(){
@@ -148,7 +145,8 @@ function openFile(id){
  markRead(id);
  if(!isPdf(url)){window.open(url,"_blank","noopener,noreferrer");return}
  document.getElementById("previewTitle").textContent=p.title||"PDFプレビュー";
- document.getElementById("previewHint").textContent="ブラウザ標準のPDF表示で開いています。表示できない場合は「別タブで開く」で、この資料のURLが正しいか確認してください。";
+ const sameUrlPosts=posts.filter(x=>x.id!==p.id&&resolvePdfUrl(x.fileUrl)===url);
+ document.getElementById("previewHint").textContent="選択資料: "+(p.fileName||decodeURIComponent(new URL(url).pathname.split("/").pop()))+(sameUrlPosts.length?" ／ 注意：別の資料にも同じPDF URLが登録されています（"+sameUrlPosts.map(x=>x.title).join("・")+"）。各資料のURL登録を確認してください。":" ／ この資料固有のURLで表示しています。")+" 表示できない場合は「別タブで開く」を試してください。";
  document.getElementById("previewExternal").href=url;
  const previous=document.getElementById("previewFrame");
  const frame=previous.cloneNode(false);

@@ -160,16 +160,24 @@ function closePreview(){
 document.getElementById("closePreview").onclick=closePreview;
 previewModal.addEventListener("click",e=>{if(e.target===previewModal)closePreview()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closePreview()});
-function openFile(id){
+async function openFile(id){
  if(!approved)return;
  const p=posts.find(x=>x.id===id);if(!p)return;
- const url=resolvePdfUrl(p.fileUrl);
- if(!url){status("資料URLが登録されていません。投稿を編集してPDFの公開URLを確認してください。");return}
- // iPhone/iPad Safariでは、非同期fetch後のwindow.openやiframe内PDF表示が
- // ブロックされる場合があるため、クリック直後にPDFのURLを直接開く。
- const opened=window.open(url,"_blank");
+ let url=resolvePdfUrl(p.fileUrl);if(!url){status("資料URLが登録されていません。");return}
+ try{url=await resolvePdfUrlVerified(url)}catch(err){status("PDF確認エラー: "+err.message);return}
  markRead(id);
- if(!opened)status("PDFを開けませんでした。Safariのポップアップ設定を確認するか、投稿の編集画面でURLをコピーして開いてください。");
+ if(!isPdf(url)){window.open(url,"_blank","noopener,noreferrer");return}
+ document.getElementById("previewTitle").textContent=p.title||"PDFプレビュー";
+ const sameUrlPosts=posts.filter(x=>x.id!==p.id&&resolvePdfUrl(x.fileUrl)===url);
+ document.getElementById("previewHint").textContent="選択資料: "+(p.fileName||decodeURIComponent(new URL(url).pathname.split("/").pop()))+(sameUrlPosts.length?" ／ 注意：別の資料にも同じPDF URLが登録されています（"+sameUrlPosts.map(x=>x.title).join("・")+"）。各資料のURL登録を確認してください。":" ／ この資料固有のURLで表示しています。")+" 表示できない場合は「別タブで開く」を試してください。";
+ document.getElementById("previewExternal").href=url;
+ const previous=document.getElementById("previewFrame");
+ const frame=previous.cloneNode(false);
+ frame.removeAttribute("src");
+ frame.title=p.title||"PDFプレビュー";
+ previewModal.classList.add("show");
+ previous.replaceWith(frame);
+ frame.src=url;
 }
 function renderCards(){
  const q=search.value.toLowerCase().trim(),unread=posts.filter(p=>!reads.has(p.id)).length;
@@ -178,7 +186,7 @@ function renderCards(){
  document.getElementById("count").textContent=`${list.length} 件（登録総数 ${posts.length} 件）`;
  cards.innerHTML=list.length?list.map(p=>{
  const fileUrl=resolvePdfUrl(p.fileUrl),link=safeLink(p.url);
- return `<article class="card"><div class="cardtop"><span class="category">${esc(p.category)}</span><span class="type">${esc(p.type)}</span>${!reads.has(p.id)?'<b style="color:#c47b00">未読</b>':""}</div><h3>${esc(p.title)}</h3><p class="desc">${esc(p.desc)}</p><div class="meta"><span>${esc(p.author)} · ${p.createdAt?.toDate?.().toLocaleDateString("ja-JP")||""}</span><span>${fileUrl?`<button class="secondary" style="padding:7px 10px" data-open="${esc(p.id)}">${isPdf(fileUrl)?"PDFを開く":"ファイルを開く"}</button>`:""} ${link?`<a class="open" href="${esc(link)}" target="_blank" rel="noopener noreferrer" data-linkread="${esc(p.id)}">リンク ↗</a>`:""}</span></div><div class="cardactions">${reads.has(p.id)?'<span class="type">既読</span>':`<button class="secondary" data-read="${esc(p.id)}">既読にする</button>`}${admin?`<button class="secondary" data-edit="${esc(p.id)}">編集</button><button class="secondary" data-delete="${esc(p.id)}">削除</button>`:""}</div></article>`;
+ return `<article class="card"><div class="cardtop"><span class="category">${esc(p.category)}</span><span class="type">${esc(p.type)}</span>${!reads.has(p.id)?'<b style="color:#c47b00">未読</b>':""}</div><h3>${esc(p.title)}</h3><p class="desc">${esc(p.desc)}</p><div class="meta"><span>${esc(p.author)} · ${p.createdAt?.toDate?.().toLocaleDateString("ja-JP")||""}</span><span>${fileUrl?`<button class="secondary" style="padding:7px 10px" data-open="${esc(p.id)}">${isPdf(fileUrl)?"PDFをサイト内で見る":"ファイルを開く"}</button>`:""} ${link?`<a class="open" href="${esc(link)}" target="_blank" rel="noopener noreferrer" data-linkread="${esc(p.id)}">リンク ↗</a>`:""}</span></div><div class="cardactions">${reads.has(p.id)?'<span class="type">既読</span>':`<button class="secondary" data-read="${esc(p.id)}">既読にする</button>`}${admin?`<button class="secondary" data-edit="${esc(p.id)}">編集</button><button class="secondary" data-delete="${esc(p.id)}">削除</button>`:""}</div></article>`;
  }).join(""):`<div class="empty">${posts.length?"検索条件に一致する資料はありません。":"資料はまだ登録されていません。"}</div>`;
  cards.querySelectorAll("[data-open]").forEach(x=>x.onclick=()=>openFile(x.dataset.open));
  cards.querySelectorAll("[data-linkread]").forEach(x=>x.onclick=()=>markRead(x.dataset.linkread));

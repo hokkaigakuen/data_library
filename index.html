@@ -127,6 +127,28 @@ function normalizeFileUrl(value){
 }
 // 特定ファイル名だけの例外処理は行わず、各資料に保存されたURLを個別に扱う。
 function resolvePdfUrl(value){return normalizeFileUrl(value)}
+// GitHub上の実ファイル名をAPIで照合し、NFC/NFD（濁点・半濁点）の違いを自動吸収する。
+// 保存時に一度だけ照合し、実際のGitHub Pages用URLをFirestoreへ保存する。
+const verifiedPdfCache=new Map();
+async function resolvePdfUrlVerified(value){
+ const normalized=normalizeFileUrl(value);if(!normalized)return "";
+ const u=new URL(normalized);
+ if(u.hostname!=="hokkaigakuen.github.io"||!u.pathname.startsWith("/data_library/"))return normalized;
+ const requested=decodeURIComponent(u.pathname).replace(/^\/data_library\//,"");
+ const cacheKey=requested.normalize("NFC");
+ if(verifiedPdfCache.has(cacheKey))return verifiedPdfCache.get(cacheKey);
+ const api="https://api.github.com/repos/hokkaigakuen/data_library/git/trees/main?recursive=1";
+ const response=await fetch(api,{headers:{Accept:"application/vnd.github+json"}});
+ if(!response.ok)throw Error("GitHubのファイル一覧を確認できませんでした（HTTP "+response.status+"）。時間をおいて再度お試しください。");
+ const tree=await response.json();
+ if(tree.truncated)throw Error("GitHubのファイル一覧が大きく、完全に確認できませんでした。");
+ const matches=(tree.tree||[]).filter(x=>x.type==="blob"&&x.path.toLowerCase().endsWith(".pdf")&&x.path.normalize("NFC")===requested.normalize("NFC"));
+ if(matches.length!==1)throw Error(matches.length?"同じ名前のPDFが複数あります。GitHubのファイル名・フォルダを確認してください。":"GitHubのdata_library内に同じ名前のPDFが見つかりません。PDFをリポジトリへ追加してmainブランチに反映してから登録してください。");
+ const exactPath=matches[0].path.split("/").map(encodeURIComponent).join("/");
+ const exactUrl="https://hokkaigakuen.github.io/data_library/"+exactPath;
+ verifiedPdfCache.set(cacheKey,exactUrl);
+ return exactUrl;
+}
 function isPdf(url){try{return decodeURIComponent(new URL(url).pathname).toLowerCase().endsWith(".pdf")}catch{return false}}
 const previewModal=document.getElementById("previewModal");
 function closePreview(){
@@ -138,10 +160,11 @@ function closePreview(){
 document.getElementById("closePreview").onclick=closePreview;
 previewModal.addEventListener("click",e=>{if(e.target===previewModal)closePreview()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closePreview()});
-function openFile(id){
+async function openFile(id){
  if(!approved)return;
  const p=posts.find(x=>x.id===id);if(!p)return;
- const url=resolvePdfUrl(p.fileUrl);if(!url){status("資料URLが登録されていません。");return}
+ let url=resolvePdfUrl(p.fileUrl);if(!url){status("資料URLが登録されていません。");return}
+ try{url=await resolvePdfUrlVerified(url)}catch(err){status("PDF確認エラー: "+err.message);return}
  markRead(id);
  if(!isPdf(url)){window.open(url,"_blank","noopener,noreferrer");return}
  document.getElementById("previewTitle").textContent=p.title||"PDFプレビュー";
@@ -183,14 +206,15 @@ e.preventDefault();if(!admin)return;
 const f=e.target,d=new FormData(f),old=posts.find(p=>p.id===editing),btn=f.querySelector('[type="submit"]');
 btn.disabled=true;btn.textContent="保存中…";
 try{
-const fileUrl=resolvePdfUrl(String(d.get("fileUrl")||"").trim()),externalUrl=String(d.get("url")||"").trim();
+let fileUrl=resolvePdfUrl(String(d.get("fileUrl")||"").trim());const externalUrl=String(d.get("url")||"").trim();
 if(fileUrl&&!isPdf(fileUrl))throw Error("資料ファイルはPDFの公開URLを登録してください（.pdf）。");
+if(fileUrl)fileUrl=await resolvePdfUrlVerified(fileUrl);
 for(const value of [fileUrl,externalUrl]){if(value){const parsed=new URL(value);if(!["https:","http:"].includes(parsed.protocol))throw Error("URLはhttp/httpsのみ利用できます");}}
 const data={title:d.get("title"),author:d.get("author"),category:d.get("category"),type:d.get("type"),desc:d.get("desc"),url:externalUrl,fileUrl,storagePath:"",fileName:fileUrl?decodeURIComponent(new URL(fileUrl).pathname.split("/").pop()):"",updatedAt:serverTimestamp()};
 if(editing){await updateDoc(doc(db,"analystLibrary",editing),data)}
 else{data.createdAt=serverTimestamp();await addDoc(collection(db,"analystLibrary"),data)}
 
-modal.classList.remove("show");f.reset();editing=null;status("");
+modal.classList.remove("show");f.reset();editing=null;status(fileUrl?"PDFの存在とファイル名を確認して保存しました。":"");
 }catch(err){status("保存エラー: "+err.message)}
 finally{btn.disabled=false;btn.textContent="投稿する"}
 };
